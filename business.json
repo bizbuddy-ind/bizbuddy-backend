@@ -1,0 +1,7 @@
+{
+  "hours": { "start": 10, "end": 18 },
+  "services": {
+    "haircut": 30,
+    "massage": 60
+  }
+}
