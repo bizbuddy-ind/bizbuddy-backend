@@ -1,3 +1,14 @@
+// Firestore setup
+const admin = require('firebase-admin');
+// Parse the service account JSON from the env var
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+  // Optional: you can set the project explicitly if needed
+  projectId: process.env.GOOGLE_CLOUD_PROJECT,
+});
+const db = admin.firestore();
+
 // index.js
 const express = require('express');
 const bodyParser = require('body-parser');
@@ -18,64 +29,69 @@ app.get('/', (req, res) => {
   res.send('BizBuddy backend is live and ready for /webhook');
 });
 
-app.post('/webhook', (req, res) => {
+app.post('/webhook', async (req, res) => {
   const twiml = new MessagingResponse();
   const incoming = (req.body.Body || '').trim().toLowerCase();
   const from = req.body.From;
 
-  // Booking request: "book haircut"
-  if (incoming.startsWith('book ')) {
-    const service = incoming.split(' ')[1];
-    const duration = config.services[service];
+  try {
+    if (incoming.startsWith('book ')) {
+      // Booking request
+      const service = incoming.split(' ')[1];
+      const duration = config.services[service];
 
-    if (!duration) {
-      twiml.message(
-        `Sorry, we don't offer '${service}'. Available: ${Object.keys(config.services).join(', ')}.`
-      );
-    } else {
-      // Calculate slots
-      const slots = [];
-      for (let h = config.hours.start; h + duration/60 <= config.hours.end; h++) {
-        slots.push(`${h}:00`);
+      if (!duration) {
+        twiml.message(`Sorry, we don't offer '${service}'. Available: ${Object.keys(config.services).join(', ')}.`);
+      } else {
+        // Calculate slots
+        const slots = [];
+        for (let h = config.hours.start; h + duration/60 <= config.hours.end; h++) {
+          slots.push(`${h}:00`);
+        }
+        // Save session to Firestore
+        await db.collection('sessions').doc(from).set({ service, slots });
+        twiml.message(`Available ${service} slots today: ${slots.join(', ')}.\nReply "confirm HH:MM" to book.`);
       }
-      // Save session for confirmation
-      sessions[from] = { service, slots };
 
-      twiml.message(
-        `Available ${service} slots today: ${slots.join(', ')}.\nReply "confirm HH:MM" to book.`
-      );
-    }
+    } else if (incoming.startsWith('confirm ')) {
+      // Confirmation request
+      const time = incoming.split(' ')[1];
+      const sessionDoc = await db.collection('sessions').doc(from).get();
 
-  // Confirmation request: "confirm 10:00"
-  } else if (incoming.startsWith('confirm ')) {
-    const time = incoming.split(' ')[1];
-    const session = sessions[from];
+      if (!sessionDoc.exists) {
+        twiml.message(`No active booking found. Please send "book <service>" first.`);
+      } else {
+        const { service, slots } = sessionDoc.data();
+        if (!slots.includes(time)) {
+          twiml.message(`That slot isn't available. Available: ${slots.join(', ')}.`);
+        } else {
+          // Persist the booking
+          await db.collection('bookings').add({
+            customer: from,
+            service,
+            time,
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
+          });
+          // Clear the session
+          await db.collection('sessions').doc(from).delete();
+          twiml.message(`Your ${service} is confirmed for today at ${time}. Thank you!`);
+        }
+      }
 
-    if (!session) {
-      twiml.message(
-        `I don't have a booking session for you. Please send "book <service>" first.`
-      );
-    } else if (!session.slots.includes(time)) {
-      twiml.message(
-        `That slot isn't available. Available: ${session.slots.join(', ')}. Reply with a valid time.`
-      );
     } else {
-      // Confirm booking
-      twiml.message(
-        `Your ${session.service} is confirmed for today at ${time}. Thank you!`
-      );
-      // Clear the session
-      delete sessions[from];
+      // Fallback: echo
+      twiml.message(`Hey - You said: ${req.body.Body || ''}`);
     }
 
-  // Fallback: echo
-  } else {
-    twiml.message(`You said: ${req.body.Body || ''}`);
+  } catch (err) {
+    console.error('Webhook Error:', err);
+    twiml.message('Oops! Something went wrong. Please try again later.');
   }
 
   res.writeHead(200, { 'Content-Type': 'text/xml' });
   res.end(twiml.toString());
 });
+
 
 // Start server
 const PORT = process.env.PORT || 3000;
