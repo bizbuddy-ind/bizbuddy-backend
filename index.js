@@ -14,7 +14,7 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const { MessagingResponse } = require('twilio').twiml;
 const fs = require('fs');
-const classifyIntent = require('./utils/aiRouter'); // ✅ GPT intent router
+const classifyIntent = require('./utils/aiRouter');
 
 const config = JSON.parse(fs.readFileSync('business.json', 'utf8'));
 const sessions = {};
@@ -33,7 +33,7 @@ app.post('/webhook', async (req, res) => {
   const from = req.body.From;
 
   try {
-    console.log("Incoming message:", incoming);
+    console.log("📩 Incoming message:", incoming);
 
     if (lower.startsWith('book ')) {
       const service = lower.split(' ')[1];
@@ -51,7 +51,6 @@ app.post('/webhook', async (req, res) => {
       }
 
     } else if (lower.startsWith('confirm ')) {
-      // ✅ Convert "4pm", "4:00 PM", etc. to "16:00"
       const rawTime = incoming.replace(/^confirm\s+/i, '').trim();
       let time;
 
@@ -90,10 +89,10 @@ app.post('/webhook', async (req, res) => {
       }
 
     } else {
-      // ✅ GPT Intent Routing
-      console.log("Passing to GPT for intent...");
+      // 🌟 GPT-based fallback
+      console.log("🧠 Passing to GPT intent parser:", incoming);
       const aiResult = await classifyIntent(incoming);
-      console.log("GPT Response:", aiResult);
+      console.log("🧠 GPT response:", aiResult);
 
       switch (aiResult.intent) {
         case 'BOOK':
@@ -127,7 +126,8 @@ app.post('/webhook', async (req, res) => {
     }
 
   } catch (err) {
-    console.error('❌ Webhook Error:', err.message, err.stack);
+    console.error('❌ Webhook Error:', err.message);
+    console.error(err.stack);
     twiml.message('Oops! Something went wrong. Please try again later.');
   }
 
