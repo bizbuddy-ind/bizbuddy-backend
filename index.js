@@ -95,14 +95,71 @@ app.post('/webhook', async (req, res) => {
       console.log("🧠 GPT response:", aiResult);
 
       switch (aiResult.intent) {
-        case 'BOOK':
-          if (!aiResult.service) {
-            twiml.message(`Sure! Which service would you like to book? We offer: ${Object.keys(config.services).join(', ')}`);
-          } else if (!aiResult.time) {
-           twiml.message(`What time would you prefer for your ${aiResult.service}?`);
-          } else {
-           twiml.message(`Got it! You want a ${aiResult.service} at ${aiResult.time}. Please type "book ${aiResult.service}" to view available slots.`);
-         }
+        case 'BOOK': {
+  const { service, time } = aiResult;
+
+  if (!service) {
+    twiml.message(`Sure! Which service would you like to book? We offer: ${Object.keys(config.services).join(', ')}`);
+    break;
+  }
+
+  if (!time) {
+    twiml.message(`What time would you prefer for your ${service}?`);
+    break;
+  }
+
+  const duration = config.services[service];
+  if (!duration) {
+    twiml.message(`Sorry, we don't offer '${service}'. Available: ${Object.keys(config.services).join(', ')}`);
+    break;
+  }
+
+  // Convert time string like "3 PM" or "3:00 PM" to 24-hour "HH:MM"
+  const timeMatch = time.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+  let formattedTime = null;
+
+  if (timeMatch) {
+    let hour = parseInt(timeMatch[1]);
+    const minute = timeMatch[2] || '00';
+    const ampm = timeMatch[3]?.toLowerCase();
+
+    if (ampm === 'pm' && hour < 12) hour += 12;
+    if (ampm === 'am' && hour === 12) hour = 0;
+
+    formattedTime = `${hour.toString().padStart(2, '0')}:${minute}`;
+  }
+
+  if (!formattedTime) {
+    twiml.message(`I didn’t understand the time. Please type it like "3 PM" or "14:00".`);
+    break;
+  }
+
+  // Generate today's available slots
+  const slots = [];
+  for (let h = config.hours.start; h + duration / 60 <= config.hours.end; h++) {
+    slots.push(`${h}:00`);
+  }
+
+  if (!slots.includes(formattedTime)) {
+    twiml.message(`Sorry, ${formattedTime} isn't available today. Available: ${slots.join(', ')}.`);
+    break;
+  }
+
+  // Save the booking
+  await db.collection('bookings').add({
+    customer: from,
+    service,
+    time: formattedTime,
+    timestamp: admin.firestore.FieldValue.serverTimestamp()
+  });
+
+  // Clear any session if exists
+  await db.collection('sessions').doc(from).delete();
+
+  twiml.message(`Your ${service} is confirmed for today at ${formattedTime}. Thank you!`);
+  break;
+}
+
   break;
         case 'RESCHEDULE':
           twiml.message(`To reschedule, please cancel your existing booking and create a new one.`);
