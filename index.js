@@ -1,61 +1,57 @@
+// Load environment variables
+require('dotenv').config();
+
 // Firestore setup
 const admin = require('firebase-admin');
-// Parse the service account JSON from the env var
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  // Optional: you can set the project explicitly if needed
   projectId: process.env.GOOGLE_CLOUD_PROJECT,
 });
 const db = admin.firestore();
 
-// index.js
+// Dependencies
 const express = require('express');
 const bodyParser = require('body-parser');
 const { MessagingResponse } = require('twilio').twiml;
 const fs = require('fs');
+const classifyIntent = require('./utils/aiRouter'); // ✅ GPT intent router
 
-// Load business config
 const config = JSON.parse(fs.readFileSync('business.json', 'utf8'));
-
-// In-memory sessions store
 const sessions = {};
 
 const app = express();
 app.use(bodyParser.urlencoded({ extended: false }));
 
-// Health-check endpoint (optional)
+// Health-check
 app.get('/', (req, res) => {
   res.send('BizBuddy backend is live and ready for /webhook');
 });
 
 app.post('/webhook', async (req, res) => {
   const twiml = new MessagingResponse();
-  const incoming = (req.body.Body || '').trim().toLowerCase();
+  const incoming = (req.body.Body || '').trim();
+  const lower = incoming.toLowerCase();
   const from = req.body.From;
 
   try {
-    if (incoming.startsWith('book ')) {
-      // Booking request
-      const service = incoming.split(' ')[1];
+    if (lower.startsWith('book ')) {
+      const service = lower.split(' ')[1];
       const duration = config.services[service];
 
       if (!duration) {
         twiml.message(`Sorry, we don't offer '${service}'. Available: ${Object.keys(config.services).join(', ')}.`);
       } else {
-        // Calculate slots
         const slots = [];
         for (let h = config.hours.start; h + duration/60 <= config.hours.end; h++) {
           slots.push(`${h}:00`);
         }
-        // Save session to Firestore
         await db.collection('sessions').doc(from).set({ service, slots });
         twiml.message(`Available ${service} slots today: ${slots.join(', ')}.\nReply "confirm HH:MM" to book.`);
       }
 
-    } else if (incoming.startsWith('confirm ')) {
-      // Confirmation request
-      const time = incoming.split(' ')[1];
+    } else if (lower.startsWith('confirm ')) {
+      const time = lower.split(' ')[1];
       const sessionDoc = await db.collection('sessions').doc(from).get();
 
       if (!sessionDoc.exists) {
@@ -65,22 +61,51 @@ app.post('/webhook', async (req, res) => {
         if (!slots.includes(time)) {
           twiml.message(`That slot isn't available. Available: ${slots.join(', ')}.`);
         } else {
-          // Persist the booking
           await db.collection('bookings').add({
             customer: from,
             service,
             time,
             timestamp: admin.firestore.FieldValue.serverTimestamp()
           });
-          // Clear the session
           await db.collection('sessions').doc(from).delete();
           twiml.message(`Your ${service} is confirmed for today at ${time}. Thank you!`);
         }
       }
 
     } else {
-      // Fallback: echo
-      twiml.message(`Hey - You said: ${req.body.Body || ''}`);
+      // 🔮 GPT Intent Routing
+      const aiResult = await classifyIntent(incoming);
+      console.log('GPT Intent Result:', aiResult);
+
+      switch (aiResult.intent) {
+        case 'BOOK':
+          twiml.message(`Got it! You want to book a ${aiResult.service} at ${aiResult.time}. Please use "book <service>" to start.`);
+          break;
+        case 'RESCHEDULE':
+          twiml.message(`To reschedule, please cancel your existing booking and create a new one.`);
+          break;
+        case 'CALLBACK':
+          await db.collection('callbacks').add({
+            customer: from,
+            message: incoming,
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
+          });
+          twiml.message(`We’ve noted your callback request. Someone will reach out soon.`);
+          break;
+        case 'DELIVERY_REQUEST':
+          await db.collection('deliveries').add({
+            customer: from,
+            details: incoming,
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
+          });
+          twiml.message(`Thanks! We’ve received your delivery request.`);
+          break;
+        case 'FAQ':
+          twiml.message(`Here’s what I found: [Coming soon – GPT-based answer]`);
+          break;
+        default:
+          twiml.message(`Sorry, I didn’t get that. Try saying “book haircut” or “I want a call back.”`);
+      }
     }
 
   } catch (err) {
@@ -92,7 +117,7 @@ app.post('/webhook', async (req, res) => {
   res.end(twiml.toString());
 });
 
-
 // Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
+
