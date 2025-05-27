@@ -1,4 +1,3 @@
-// Load environment variables
 require('dotenv').config();
 
 // Firestore setup
@@ -23,7 +22,6 @@ const sessions = {};
 const app = express();
 app.use(bodyParser.urlencoded({ extended: false }));
 
-// Health-check
 app.get('/', (req, res) => {
   res.send('BizBuddy backend is live and ready for /webhook');
 });
@@ -35,6 +33,8 @@ app.post('/webhook', async (req, res) => {
   const from = req.body.From;
 
   try {
+    console.log("Incoming message:", incoming);
+
     if (lower.startsWith('book ')) {
       const service = lower.split(' ')[1];
       const duration = config.services[service];
@@ -51,7 +51,24 @@ app.post('/webhook', async (req, res) => {
       }
 
     } else if (lower.startsWith('confirm ')) {
-      const time = lower.split(' ')[1];
+      // ✅ Convert "4pm", "4:00 PM", etc. to "16:00"
+      const rawTime = incoming.replace(/^confirm\s+/i, '').trim();
+      let time;
+
+      const timeMatch = rawTime.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+      if (timeMatch) {
+        let hour = parseInt(timeMatch[1]);
+        const minute = timeMatch[2] ? timeMatch[2] : '00';
+        const ampm = timeMatch[3]?.toLowerCase();
+
+        if (ampm === 'pm' && hour < 12) hour += 12;
+        if (ampm === 'am' && hour === 12) hour = 0;
+
+        time = `${hour.toString().padStart(2, '0')}:${minute}`;
+      } else {
+        time = rawTime;
+      }
+
       const sessionDoc = await db.collection('sessions').doc(from).get();
 
       if (!sessionDoc.exists) {
@@ -73,9 +90,10 @@ app.post('/webhook', async (req, res) => {
       }
 
     } else {
-      // 🔮 GPT Intent Routing
+      // ✅ GPT Intent Routing
+      console.log("Passing to GPT for intent...");
       const aiResult = await classifyIntent(incoming);
-      console.log('GPT Intent Result:', aiResult);
+      console.log("GPT Response:", aiResult);
 
       switch (aiResult.intent) {
         case 'BOOK':
@@ -109,7 +127,7 @@ app.post('/webhook', async (req, res) => {
     }
 
   } catch (err) {
-    console.error('Webhook Error:', err);
+    console.error('❌ Webhook Error:', err.message, err.stack);
     twiml.message('Oops! Something went wrong. Please try again later.');
   }
 
@@ -117,7 +135,5 @@ app.post('/webhook', async (req, res) => {
   res.end(twiml.toString());
 });
 
-// Start server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
-
+app.listen(PORT, () => console.log(`✅ Listening on port ${PORT}`));
