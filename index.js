@@ -96,8 +96,14 @@ app.post('/webhook', async (req, res) => {
 
       switch (aiResult.intent) {
         case 'BOOK':
-          twiml.message(`Got it! You want to book a ${aiResult.service} at ${aiResult.time}. Please use "book <service>" to start.`);
-          break;
+          if (!aiResult.service) {
+            twiml.message(`Sure! Which service would you like to book? We offer: ${Object.keys(config.services).join(', ')}`);
+          } else if (!aiResult.time) {
+           twiml.message(`What time would you prefer for your ${aiResult.service}?`);
+          } else {
+           twiml.message(`Got it! You want a ${aiResult.service} at ${aiResult.time}. Please type "book ${aiResult.service}" to view available slots.`);
+         }
+  break;
         case 'RESCHEDULE':
           twiml.message(`To reschedule, please cancel your existing booking and create a new one.`);
           break;
